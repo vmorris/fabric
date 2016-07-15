@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+
+### This script creates an N peer hyperledger fabric on a docker host and a membersrvc container.
+### All output from the peers and the membersrvc are sent to a screen session.
+###
+### Author: Vance Morris
+### Copyright 2016, IBM Corp.
+
+usage() {
+    echo "Starts a fabric network using a local docker host. Assumes hyperledger/fabric-peer and"
+    echo "hyperledger/membersrvc images are readily available."
+    echo
+    echo "Usage:"
+    echo "$0 [-n <peers>] [-h]"
+    echo
+    echo " -n : Number of peer containers to start, default is 2, max is 10."
+    echo " -h : display this output."
+    exit 1
+}
+
+declare -A CREDENTIALS=( ["test_vp0"]="MwYpmSRjupbT"
+                         ["test_vp1"]="5wgHK9qqYaPy"
+                         ["test_vp2"]="vQelbRvja7cJ"
+                         ["test_vp3"]="9LKqKH5peurL"
+                         ["test_vp4"]="Pqh90CEW5juZ"
+                         ["test_vp5"]="FfdvDkAdY81P"
+                         ["test_vp6"]="QiXJgHyV4t7A"
+                         ["test_vp7"]="twoKZouEyLyB"
+                         ["test_vp8"]="BxP7QNh778gI"
+                         ["test_vp9"]="wu3F1EwJWHvQ" )
+
+DOCKER_HTTP="http://172.17.0.1:2375"
+
+# validate input
+case "$#" in
+0)
+    num_peer=2
+    ;;
+1)
+    if [ "$1" == "-h" ]; then
+        usage
+    else
+        usage
+    fi
+    ;;
+2)  if [ "$1" == "-n" ]; then
+        num_peer=$2
+    else
+        usage
+    fi
+    ;;
+esac
+
+# start windows in an already running session (peer screens)
+# $1 is the peer container name
+start_peer_screen() {
+   screen -S fabric-network -X screen -t $1
+}
+
+# start the peer inside a given screen
+# $1 is the peer container name
+# $2 is the membersrvc IP address
+start_peer() {
+    comm="docker run --rm -it --name=$1 \
+-e CORE_VM_ENDPOINT=$DOCKER_HTTP \
+-e CORE_PEER_ID=$1 \
+-e CORE_PEER_ADDRESSAUTODETECT=true \
+-e CORE_SECURITY_ENABLED=true \
+-e CORE_SECURITY_PRIVACY=true \
+-e CORE_PEER_PKI_ECA_PADDR=$2:50051 \
+-e CORE_PEER_PKI_TCA_PADDR=$2:50051 \
+-e CORE_PEER_PKI_TLSCA_PADDR=$2:50051 \
+-e CORE_SECURITY_ENROLLID=$1 \
+-e CORE_SECURITY_ENROLLSECRET=${CREDENTIALS[$1]} \
+hyperledger/fabric-peer peer node start"
+
+    # stuff the command into the screen
+    screen -S fabric-network -p $1 -X stuff $"$comm\n"
+    sleep 2
+}
+
+main() {
+    echo "Starting the membersrvc container..."
+    screen -S fabric-network -t membersrvc -A -d -m
+    comm="docker run --rm -it --name membersrvc hyperledger/fabric-membersrvc membersrvc membersrvc"
+    screen -S fabric-network -p membersrvc -X stuff $"$comm\n"
+    sleep 2
+    membersrvc_ip="$(docker inspect -f "{{ .NetworkSettings.IPAddress }}" membersrvc)"
+    echo "membersrvc container started: $membersrvc_ip"
+
+    echo "Starting $num_peer containers..."
+    for ((i=0;i<$num_peer;i++)); do
+        peer_id="test_vp$i"
+        start_peer_screen $peer_id
+        sleep 2
+        start_peer $peer_id $membersrvc_ip
+        peer_ip="$(docker inspect -f "{{ .NetworkSettings.IPAddress }}" $peer_id)"
+        echo "peer container $peer_id started: $peer_ip"
+    done
+
+    ## ALL DONE
+    echo "Fabric peer network has started!"
+    docker ps
+    echo "connect to the consoles with 'screen -r fabric-network' and disconnect by pressing CTRL+A, followed by d"
+    exit 0
+}
+
+# call main
+main
